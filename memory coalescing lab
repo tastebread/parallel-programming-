@@ -1,0 +1,84 @@
+#memory coalescing 을이용한 행렬곱 
+
+#include <cuda.h>
+#include <stdio.h>
+#include <time.h>
+#include <sys/time.h>
+
+#define WIDTH 64
+#define ARRAY_SIZE WIDTH * WIDTH
+#define WIDTH1 32
+
+__global__ void memory_coalescing(float *Pd, float *Md, float *Nd)
+{
+
+                __shared__ float Mds[WIDTH][WIDTH];
+                __shared__ float Nds[WIDTH][WIDTH];
+
+                int bx = blockIdx.x;
+                int by = blockIdx.y;
+                int tx = threadIdx.x;
+                int ty = threadIdx.y;
+
+                int Row = by*blockDim.y + ty;
+                int Col = bx*blockDim.x + tx;
+
+                float Pvalue = 0;
+
+                for(int m=0; m<WIDTH; ++m)
+                {
+                        Mds[ty][tx] =Md[Row*ARRAY_SIZE + tx + m*WIDTH];
+                        // Md[Row*WIDTH + (m*WIDTH + tx)];
+                        Nds[ty][tx] =Nd[Col*ARRAY_SIZE + tx + m*WIDTH];
+                        // Nd[(m*WIDTH + ty)*WIDTH+Col];
+
+                        __syncthreads();
+                        for(int k =0; k<WIDTH; ++k){
+                                Pvalue+=Mds[ty][k]*Nds[k][tx];
+                                __syncthreads();
+                        }
+                }
+}
+
+int main(int argc, char **argv)
+{
+int i,j;
+        float *M, *N, *P;
+        float *Md, *Nd, *Pd;
+
+                M = (float*)malloc(ARRAY_SIZE*sizeof(float));
+                N = (float*)malloc(ARRAY_SIZE*sizeof(float));
+                P = (float*)malloc(ARRAY_SIZE*sizeof(float));
+                cudaMalloc((void**)&Md, ARRAY_SIZE*sizeof(float));
+                cudaMalloc((void**)&Nd, ARRAY_SIZE*sizeof(float));
+                cudaMalloc((void**)&Pd, ARRAY_SIZE*sizeof(float));
+
+                for(i=0; i<WIDTH; i++)
+                {
+                        for(j=0; j<WIDTH; j++)
+                        {
+                                M[WIDTH*i+j] = 1;
+                                N[WIDTH*i+j] = 1;
+                        }
+                }
+                cudaMemcpy(Md, M, ARRAY_SIZE, cudaMemcpyHostToDevice);
+                cudaMemcpy(Nd, N, ARRAY_SIZE, cudaMemcpyHostToDevice);
+                cudaMemcpy(Pd, P, ARRAY_SIZE, cudaMemcpyHostToDevice);
+
+                dim3 dimBlock(16, 16);
+                dim3 dimGrid((ARRAY_SIZE + 16 - 1) / 16, (ARRAY_SIZE + 16 - 1) / 16);
+
+                clock_t st = clock();
+                memory_coalescing<<<dimGrid, dimBlock>>>(Pd, Md, Nd);
+                cudaMemcpy(P, Pd, ARRAY_SIZE, cudaMemcpyDeviceToHost);
+
+                clock_t ed = clock();
+
+                printf("GPU (shared)  processing time = %2.lf ms \n",(float) ed - st);
+                free(M);
+                free(N);
+                free(P);
+                cudaFree(Md);
+                cudaFree(Nd);
+                cudaFree(Pd);
+}
